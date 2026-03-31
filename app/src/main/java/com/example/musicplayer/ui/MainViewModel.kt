@@ -14,6 +14,7 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.example.musicplayer.data.AudioFile
 import com.example.musicplayer.data.AudioRepository
+import com.example.musicplayer.data.PlaybackPreferences
 import com.example.musicplayer.service.PlaybackService
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
@@ -56,8 +57,10 @@ class MainViewModel : ViewModel() {
 
     private var mediaControllerFuture: ListenableFuture<MediaController>? = null
     private var mediaController: MediaController? = null
+    private var playbackPreferences: PlaybackPreferences? = null
 
     suspend fun initializeController(context: Context) {
+        playbackPreferences = PlaybackPreferences(context)
         val sessionToken = SessionToken(context, ComponentName(context, PlaybackService::class.java))
         mediaControllerFuture = MediaController.Builder(context, sessionToken).buildAsync()
         suspendCancellableCoroutine<Unit> { continuation ->
@@ -71,9 +74,15 @@ class MainViewModel : ViewModel() {
                             viewModelScope.launch {
                                 while (isPlaying) {
                                     currentPosition = mediaController?.currentPosition ?: 0L
+                                    playbackPreferences?.saveLastPosition(currentPosition)
                                     delay(1000)
                                 }
                             }
+                        } else {
+                            // Save position when paused
+                            val pos = mediaController?.currentPosition ?: 0L
+                            currentPosition = pos
+                            playbackPreferences?.saveLastPosition(pos)
                         }
                     }
 
@@ -82,6 +91,7 @@ class MainViewModel : ViewModel() {
                         val id = mediaItem?.mediaId?.toLongOrNull()
                         if (id != null) {
                             currentSong = allAudioFiles.find { it.id == id }
+                            playbackPreferences?.saveLastPlayedSong(id)
                         }
                     }
 
@@ -104,6 +114,26 @@ class MainViewModel : ViewModel() {
         allAudioFiles = files
         val mediaItems = files.map(::createMediaItem)
         mediaController?.setMediaItems(mediaItems)
+
+        // Restore state
+        val lastPlayedId = playbackPreferences?.getLastPlayedSongId()
+        if (lastPlayedId != null) {
+            val lastSong = files.find { it.id == lastPlayedId }
+            if (lastSong != null) {
+                currentSong = lastSong
+                val lastPosition = playbackPreferences?.getLastPosition() ?: 0L
+                currentPosition = lastPosition
+                
+                // Seek to the saved song and position without playing
+                val index = files.indexOf(lastSong)
+                if (index != -1) {
+                    mediaController?.seekTo(index, lastPosition)
+                    mediaController?.prepare()
+                    // Do not auto-play
+                    mediaController?.pause() 
+                }
+            }
+        }
     }
 
     fun onSearchQueryChange(newQuery: String) {
